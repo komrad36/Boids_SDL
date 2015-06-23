@@ -16,6 +16,7 @@ PrtScn- save screenshot to CWD
 Esc   - quit
 
 Verisons of this are also available (not currently uploaded to github) as pure python (very slow!) and as a SWIG Python-C
-hybrid, where Python handles front-end but calls a multithreaded C engine for the math, showcasing interoperability.
+hybrid, where Python handles front-end but calls a multithreaded C engine for the math, showcasing interoperability. Contact
+me if interested.
 
 Please see screenshot demos in master branch!
