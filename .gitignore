@@ -6,7 +6,6 @@
 !*.cpp
 !*.h
 !*.md
-main.cpp
 
 # Windows image file caches
 Thumbs.db
