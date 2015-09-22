@@ -7,151 +7,120 @@
 *   This program is entirely my own work.
 *******************************************************************/
 
-// This module contains the code for the Boid math and rendering.
-
+// Boids simulates bird ("boid"), fish, crowd, etc. flocking behavior,
+// resulting in emergent properties. The main focus of the project is
+// showcasing high performance computing, so I refer you to the version
+// titled Boids_CUDA_GL, which, as the name implies, uses CUDA for
+// computation and then leverages CUDA-OpenGL interoperability to
+// write output directly to an OpenGL texture for rendering, with
+// no memory transfers or CPU involvement whatsoever. This causes
+// epic performance.
+//
+// This is the multithreaded CPU version. As this is a computationally
+// intensive problem with naive neighbor search, this will be slow
+// at more than a few thousand birds.
+//
+// The simulation can be sped up using a k-d tree or neighborhood
+// matrix, solutions I implement in the CUDA version. Again, this
+// CPU version is a concept demo for machines without nVIDIA graphics.
+//
+// This simulation
+// is primarily tuned for aesthetics, not physical accuracy, although
+// careful selection of parameters can produce very flock-like emergent
+// behavior. The color of each boid is determined by its direction of travel.
+// Screen-wrapping and fullscreen are available as options in params.h as
+// well as a variety of simulation parameters.
+//
+// Requires SDL and SDL_ttf.
+//
+// Commands:
+//	Space			-	toggle screen blanking
+//	P				-	pause
+//	R				-	randomize boid positions
+//	LCTRL			-	switch between mouse attraction and repulsion
+//	LSHIFT			-	toggle STRONG attraction/repulsion
+//	ESC				-	quit
+//	Hold mouse btn	-	enable attraction/repulsion to mouse
 
 #include "Boids.h"
 
-// Random number generator for random initial positions
+// random number generator for boid initial positions
 std::random_device rd;
 std::mt19937 gen(rd());
 std::uniform_real_distribution<float> positionRandomDist(0.0, P_MAX);
 
-// Current boid to process, for threading
-unsigned int curIndex = 0;
+#ifdef DYNAMIC_COLOR_MODE
+RGB angleToRGB(const float angle) {
+	// mult by 3/pi, equivalent to dividing by (pi/3) (60 degrees)
+	float section = angle * THREE_OVER_PI;
+	int i = static_cast<int>(section);
+	float frac = section - i;
 
-// for blocking curIndex
-std::mutex indexUpdateMutex;
+	uint8_t HSV_to_RGB[6] = { MAX_RGB, static_cast<uint8_t>(fMAX_RGB - fMAX_RGB*frac), 0, 0, static_cast<uint8_t>(fMAX_RGB*frac), MAX_RGB };
 
-float x_in_array[NUMBER_OF_BOIDS];
-float y_in_array[NUMBER_OF_BOIDS];
-float vx_in_array[NUMBER_OF_BOIDS];
-float vy_in_array[NUMBER_OF_BOIDS];
-
-float x_out_array[NUMBER_OF_BOIDS];
-float y_out_array[NUMBER_OF_BOIDS];
-float vx_out_array[NUMBER_OF_BOIDS];
-float vy_out_array[NUMBER_OF_BOIDS];
-
-float *x_in = x_in_array;
-float *y_in = y_in_array;
-float *vx_in = vx_in_array;
-float *vy_in = vy_in_array;
-
-float *x_out = x_out_array;
-float *y_out = y_out_array;
-float *vx_out = vx_out_array;
-float *vy_out = vy_out_array;
-
-std::thread *threads;
-
-// Simplified HSV to RGB with S and V both 100%
-RGB angleToRGB(float angle) {
-	float       q, ff;
-	long        i;
-	RGB         out;
-
-	//if (angle >= 360.0) angle = 0.0;
-	angle /= 60.0f;
-	i = (long)angle;
-	ff = angle - i;
-	q = 1.0f - ff;
-
-	switch (i) {
-	case 0:
-		out.R = 255U;
-		out.G = (uint8_t)(255.0f * ff);
-		out.B = 0U;
-		break;
-	case 1:
-		out.R = (uint8_t)(255.0f * q);
-		out.G = 255U;
-		out.B = 0U;
-		break;
-	case 2:
-		out.R = 0U;
-		out.G = 255U;
-		out.B = (uint8_t)(255.0f * ff);
-		break;
-	case 3:
-		out.R = 0U;
-		out.G = (uint8_t)(255.0f * q);
-		out.B = 255U;
-		break;
-	case 4:
-		out.R = (uint8_t)(255.0f * ff);
-		out.G = 0U;
-		out.B = 255U;
-		break;
-	default:
-		out.R = 255U;
-		out.G = 0U;
-		out.B = (uint8_t)(255.0f * q);
-	}
-	return out;
+	// assuming max V and H, we can get RGB quickly by rotating them around, each separated by 60 degrees,
+	// which we do quickly by using the 60 degree sector of the normalized velocity vector
+	// to index into the HSV_to_RGB array accordingly.
+	return RGB(HSV_to_RGB[i], HSV_to_RGB[(i + 4) % NUM_HSV_SECTORS], HSV_to_RGB[(i + 2) % NUM_HSV_SECTORS]);
 }
+#endif
 
-// Return shortest distance between coordinates c1 to c2,
-// screenwrapping if necessary, and preserving direction
-// of travel to get there.
-inline float diff(const float c1, const float c2) {
+#ifdef SCREEN_WRAP
+float diff(const float c1, const float c2) {
 	float direct_distance = c2 - c1;
-	float wrap_distance = direct_distance + ((c2 > c1) ? -P_MAX : P_MAX);
+	float wrap_distance = (c2 > c1) ? direct_distance - fP_MAX : direct_distance + fP_MAX;
 
-	// figure out whether a direct path or one that wraps around the screen is shorter
-	// but sign must be preserved to provide direction-to-destination info to boid
-
-	return (fabs(direct_distance) < fabs(wrap_distance)) ? direct_distance : wrap_distance;
-
-	//return c2 - c1;
+	return fabsf(direct_distance) < fHALF_P_MAX ? direct_distance : wrap_distance;
 }
 
-// Return shortest distance between coordinates c1 to c2,
-// screenwrapping if necessary, *independent* of direction
-// fast as hell. For uses that only want magnitude
-inline float fastdiff(const float c1, const float c2) {
+float fastdiff(const float c1, const float c2) {
 	float direct_distance = fabs(c2 - c1);
 
-	return (direct_distance < HALF_fP_MAX) ? direct_distance : fP_MAX - direct_distance;
-
-	//return c2 - c1;
+	return (direct_distance < fHALF_P_MAX) ? direct_distance : fP_MAX - direct_distance;
 }
 
-// Shortcut to add sign info to fastdiff to produce equivalent
-// results as diff
-inline float fastdiffToDiff(const float fastDiff, const float c1, const float c2) {
-	return ((fabs(c2 - c1) < HALF_fP_MAX) ^ (c2 < c1)) ? fastDiff : -fastDiff;
+float fastdiffToDiff(const float fast_diff, const float c1, const float c2) {
+	return ((fabs(c2 - c1) < fHALF_P_MAX) ^ (c2 < c1)) ? fast_diff : -fast_diff;
 }
+#endif
 
-float crazyStupidFastSqrtApprox(const float x) {
-	int iX = (*(int*)&x >> 1) + 0x1FBD3EE7;
-	return *(float*)&iX;
-}
-
-void launchThread(unsigned int startIndex, unsigned int endIndex) {
+void Physics::launchThread(int start_idx, int end_idx) {
 	float diffx, diffy, x, y, Vx, Vy, modVx, modVy, modVmag, magVsquared, fMouseX, fMouseY;
-	float timeFactor, factor, CMsumX, CMsumY, REPsumX, REPsumY, ALsumX, ALsumY;
-	unsigned int drawPos, neighbors, boid, test_boid;
+	float time_factor, factor, CMsumX, CMsumY, REPsumX, REPsumY, ALsumX, ALsumY;
+	int neighbors, boid, test_boid;
 
 	_MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
 
 	for (;;) {
-		for (boid = startIndex; boid <= endIndex; ++boid) {
+		for (boid = start_idx; boid <= end_idx; ++boid) {
 
-			x = x_in[boid];
-			y = y_in[boid];
-			Vx = vx_in[boid];
-			Vy = vy_in[boid];
+			// bring boid's position and velocity local
+			x = in[boid].x;
+			y = in[boid].y;
+			Vx = in[boid].vx;
+			Vy = in[boid].vy;
 
-			// apply mouse-related rule
-			fMouseX = (float)(mousexpos * P_MAX) / fWidth;
-			fMouseY = (float)(mouseypos * P_MAX) / fHeight;
-			timeFactor = time_since_last_frame / TICK_DIVISOR;
-			diffx = diff(x, fMouseX);
-			diffy = diff(y, fMouseY);
-			factor = ((mouse_buttons_down) ? (repulsion_multiplier * ((repulsion_boost) ? STRONG_DOWN_STRENGTH_FACTOR : WEAK_MOUSE_DOWN_STRENGTH_FACTOR)) : 0.0f) / (sqrt(diffx * diffx + diffy * diffy) + 0.1f);
-			Vx += timeFactor * diffx * factor;
-			Vy += timeFactor * diffy * factor;
+			time_factor = TICK_FACTOR * time_since_last_frame;
+
+			// apply mouse attraction/repulsion rules
+			if (mouse_buttons_down) {
+				fMouseX = static_cast<float>(mouse_x * P_MAX) / fWidth;
+				fMouseY = static_cast<float>(mouse_y * P_MAX) / fHeight;
+#ifdef SCREEN_WRAP
+				diffx = diff(x, fMouseX);
+				diffy = diff(y, fMouseY);
+#else
+				diffx = fMouseX - x;
+				diffy = fMouseY - y;
+#endif
+
+				// We update the velocity components by a factor proportional to time elapsed
+				// and ratio of component distance to the cursor to the total distance to the cursor
+				// for a natural-looking attraction model
+				factor = ((mouse_buttons_down) ? (repulsion_multiplier * ((repulsion_boost) ? STRONG_DOWN_STRENGTH_FACTOR : WEAK_MOUSE_DOWN_STRENGTH_FACTOR)) : 0.0f) / (sqrt(diffx * diffx + diffy * diffy) + PREVENT_ZERO_RETURN);
+				Vx += time_factor * diffx * factor;
+				Vy += time_factor * diffy * factor;
+			}
 
 			// apply neighbor-related rules for every other boid that's a neighbor
 			CMsumX = 0.0f; CMsumY = 0.0f; REPsumX = 0.0f; REPsumY = 0.0f; ALsumX = 0.0f; ALsumY = 0.0f;
@@ -159,156 +128,177 @@ void launchThread(unsigned int startIndex, unsigned int endIndex) {
 			neighbors = 0;
 			for (test_boid = 0; test_boid < NUMBER_OF_BOIDS; ++test_boid) {
 
-				diffx = fastdiff(x, x_in[test_boid]);
-				diffy = fastdiff(y, y_in[test_boid]);
+#ifdef SCREEN_WRAP
+				diffx = fastdiff(x, in[test_boid].x);
+				diffy = fastdiff(y, in[test_boid].y);
+#else
+				diffx = in[test_boid].x - x;
+				diffy = in[test_boid].y - y;
+#endif
+				// to optimize we don't branch on whether neighbor is self,
+				// which means we will always be counted as our own neighbor
+				// The only rule this affects is alignment (the others go to
+				// 0 due to distance being 0) and we deal with that later...
 				if (diffx * diffx + diffy * diffy < NEIGHBOR_DISTANCE_SQUARED) {
-					++neighbors;
 
-					diffx = fastdiffToDiff(diffx, x, x_in[test_boid]);
-					diffy = fastdiffToDiff(diffy, y, y_in[test_boid]);
+#ifdef SCREEN_WRAP
+					diffx = fastdiffToDiff(diffx, x, in[test_boid].x);
+					diffy = fastdiffToDiff(diffy, y, in[test_boid].y);
+#endif
 
-					//diffx = diff(x, x_in[test_boid]);
-					//diffy = diff(y, y_in[test_boid]);
-					
+					// update center of mass rule by distance and direction to neigbor
 					CMsumX += diffx;
 					CMsumY += diffy;
 
-					factor = diffx*diffx + diffy*diffy + PREVENT_ZERO_RETURN;
-					REPsumX -= diffx / factor;
-					REPsumY -= diffy / factor;
+					factor = 1.0f / (diffx*diffx + diffy*diffy + PREVENT_ZERO_RETURN);
+					// update repulsion rule by ratio of component distance to square of total distance to neighbor
+					// for natural repulsion model
+					REPsumX -= diffx * factor;
+					REPsumY -= diffy * factor;
 
-					ALsumX += vx_in[test_boid];
-					ALsumY += vy_in[test_boid];
+					// update alignment rule by component velocity of neighbor
+					ALsumX += in[test_boid].vx;
+					ALsumY += in[test_boid].vy;
+
+					// keep track of total neighbor count for averaging these rule sums
+					++neighbors;
 				}
 			}
-			Vx += timeFactor * CMsumX / ((float)neighbors * CENTER_OF_MASS_STRENGTH_DIVISOR) + REPULSION_STRENGTH_FACTOR * REPsumX + (ALsumX - vx_in[boid]) / (float)(neighbors * ALIGNMENT_STRENGTH_DIVISOR);
-			Vy += timeFactor * CMsumY / ((float)neighbors * CENTER_OF_MASS_STRENGTH_DIVISOR) + REPULSION_STRENGTH_FACTOR * REPsumY + (ALsumY - vy_in[boid]) / (float)(neighbors * ALIGNMENT_STRENGTH_DIVISOR);
-			// corrected for the fact that own boid was counted as neighbor
-			
+#ifdef SCREEN_WRAP
+			// okay, this is a fun one. We update the velocity component by the time factor multiplied by the center of mass average, which is the center of mass sum computed
+			// in the loop above, divided by the number of neighbors.
+			// We do the same with repulsion and alignment (there we must subtract our own velocity as it's the only rule affected by the fact that we chose to not
+			// check whether the test boid is distinct (for speed), and thus count ourselves as a neighbor.
+			Vx += time_factor * (CMsumX * CENTER_OF_MASS_STRENGTH_FACTOR / neighbors + REPULSION_STRENGTH_FACTOR * REPsumX + (ALsumX - in[boid].vx) * ALIGNMENT_STRENGTH_FACTOR / neighbors);
+			Vy += time_factor * (CMsumY * CENTER_OF_MASS_STRENGTH_FACTOR / neighbors + REPULSION_STRENGTH_FACTOR * REPsumY + (ALsumY - in[boid].vx) * ALIGNMENT_STRENGTH_FACTOR / neighbors);
+#else
+			// the same occurs with screenwrap off as the above description, with one change: now repulsion also includes
+			// a term for repelling off the edges of the screen, if within range, inversely proportional to distance from edge
+			Vx += time_factor * (CMsumX * CENTER_OF_MASS_STRENGTH_FACTOR / neighbors + REPULSION_STRENGTH_FACTOR * (REPsumX + EDGE_REPULSION_STRENGTH_FACTOR*(x < NEIGHBOR_DISTANCE)*(NEIGHBOR_DISTANCE - x) - EDGE_REPULSION_STRENGTH_FACTOR*(x > fP_MAX - NEIGHBOR_DISTANCE)*(x - (fP_MAX - NEIGHBOR_DISTANCE))) + (ALsumX - in[boid].vx) * ALIGNMENT_STRENGTH_FACTOR / neighbors);
+			Vy += time_factor * (CMsumY * CENTER_OF_MASS_STRENGTH_FACTOR / neighbors + REPULSION_STRENGTH_FACTOR * (REPsumY + EDGE_REPULSION_STRENGTH_FACTOR*(y < NEIGHBOR_DISTANCE)*(NEIGHBOR_DISTANCE - y) - EDGE_REPULSION_STRENGTH_FACTOR*(y > fP_MAX - NEIGHBOR_DISTANCE)*(y - (fP_MAX - NEIGHBOR_DISTANCE))) + (ALsumY - in[boid].vx) * ALIGNMENT_STRENGTH_FACTOR / neighbors);
+#endif
+
 			// limit velocity if over V_LIM
 			magVsquared = Vx*Vx + Vy*Vy;
 			factor = (magVsquared > V_LIM_2) ? V_LIM / sqrt(magVsquared) : 1.0f;
 			Vx *= factor;
 			Vy *= factor;
 
-			// tick
-			x += Vx * timeFactor;
-			y += Vy * timeFactor;
+#ifdef SCREEN_WRAP
+			// update position...
+			x += Vx * time_factor;
+			y += Vy * time_factor;
+			// ...then screenwrap it and store the result both to
+			// the local component and to the global out array
+			out[boid].x = (x += fP_MAX*((x < 0.0f) - (x >= fP_MAX)));
+			out[boid].y = (y += fP_MAX*((y < 0.0f) - (y >= fP_MAX)));
+#else
+			// if not screenwrapping,
+			// adjust the sign of the velocity of any boid outside the box
+			// so it's heading inside again in case that wasn't handled
+			// by the repulsion force.
+			//
+			// do NOT just bring its position to some value like 0.0f
+			// because then multiple boids would collide (share the exact
+			// same position) and thus might move together in future
+			// if their velocities also match (as they might well - reduced
+			// to a zero or V_LIM equilibrium in a corner, say)...
+			if (x < 0.0f) Vx = fabs(Vx);
+			if (x >= fP_MAX) Vx = -fabs(Vx);
+			if (y < 0.0f) Vy = fabs(Vy);
+			if (y >= fP_MAX) Vy = -fabs(Vy);
 
-			// screen wrap
-			if (x > fP_MAX)
-				x -= fP_MAX;
-			if (x < 0.0f)
-				x += fP_MAX;
-			if (y > fP_MAX)
-				y -= fP_MAX;
-			if (y < 0.0f)
-				y += fP_MAX;
+			// ...and THEN update position so we move back inside
+			// without looking too unnaturally bounded
+			x += Vx * time_factor;
+			y += Vy * time_factor;
 
-			// copyback
-			x_out[boid] = x;
-			y_out[boid] = y;
-			vx_out[boid] = Vx;
-			vy_out[boid] = Vy;
+			out[boid].x = x;
+			out[boid].y = y;
+#endif
+
+			// store velocities back to global
+			out[boid].vx = Vx;
+			out[boid].vy = Vy;
 
 			// return to screen reference frame
 			x = fWidth * x / fP_MAX;
 			y = fHeight * y / fP_MAX;
 
-			// convert vel to unit vectors
-			modVx = fWidth*Vx / fP_MAX;
-			modVy = fHeight*Vy / fP_MAX;
-			modVmag = sqrt(modVx*modVx + modVy*modVy + PREVENT_ZERO_RETURN);
-			Vx = modVx / modVmag;
-			Vy = modVy / modVmag;
+			// convert vel to screen frame, off by a constant fP_MAX
+			// (that's okay because we're about to normalize)
+			modVx = fWidth*Vx;
+			modVy = fHeight*Vy;
+			modVmag = 1.0f / sqrt(modVx*modVx + modVy*modVy + PREVENT_ZERO_RETURN);
+			Vx = modVx * modVmag;
+			Vy = modVy * modVmag;
 
 #ifdef DYNAMIC_COLOR_MODE
-			colors[boid] = angleToRGB(180.0f / (float)M_PI * atan2f(Vx, Vy) + 180.0f);
+			out[boid].color = angleToRGB(atan2f(Vx, Vy) + fPI);
 #endif
 
-			drawPos = 4 * boid;
-			drawingPoints[drawPos] = (int)(x - LINE_LENGTH * Vx + 0.5f);
-			drawingPoints[drawPos + 1] = (int)(y - LINE_LENGTH * Vy + 0.5f);
-			drawingPoints[drawPos + 2] = (int)(x + LINE_LENGTH * Vx + 0.5f);
-			drawingPoints[drawPos + 3] = (int)(y + LINE_LENGTH * Vy + 0.5f);
+			out[boid].draw_x1 = static_cast<int>(x - LINE_LENGTH * Vx + 0.5f);
+			out[boid].draw_y1 = static_cast<int>(y - LINE_LENGTH * Vy + 0.5f);
+			out[boid].draw_x2 = static_cast<int>(x + LINE_LENGTH * Vx + 0.5f);
+			out[boid].draw_y2 = static_cast<int>(y + LINE_LENGTH * Vy + 0.5f);
 
 		} // dynamic thread reassign
-		indexUpdateMutex.lock();
-		if (curIndex >= NUMBER_OF_BOIDS) {
-			indexUpdateMutex.unlock();
+		mtx.lock();
+		if (cur_idx >= NUMBER_OF_BOIDS) {
+			mtx.unlock();
 			return;
 		}
-		startIndex = curIndex;
-		curIndex += (NUMBER_OF_BOIDS - curIndex) / numCPU / 2 + 1;
-		endIndex = curIndex - 1;
-		indexUpdateMutex.unlock();
+		start_idx = cur_idx;
+		cur_idx += (NUMBER_OF_BOIDS - cur_idx) / num_CPU / 2 + 1;
+		end_idx = cur_idx - 1;
+		mtx.unlock();
 	}
 }
 
-void initThreads() {
-	// get number of logical cores
+void Physics::initThreads() {
 #ifdef OVERRIDE_CPU_COUNT_AUTODETECT
-	numCPU = OVERRIDE_CPU_COUNT_AUTODETECT;
+	num_CPU = OVERRIDE_CPU_COUNT_AUTODETECT;
 #else
-	numCPU = std::min((unsigned int)NUMBER_OF_BOIDS, std::thread::hardware_concurrency());
+	num_CPU = std::min(static_cast<unsigned int>(NUMBER_OF_BOIDS), std::thread::hardware_concurrency());
 #endif
 
-	threads = new std::thread[numCPU];
+	threads = new std::thread[num_CPU];
 }
 
-void spawnBoids() {
+void Physics::spawnBoids() {
 	// generate host-side random initial positions
-	for (unsigned int i = 0; i < NUMBER_OF_BOIDS; ++i) {
-		vx_in[i] = 0.0f;
-		vy_in[i] = 0.0f;
+	for (int i = 0; i < NUMBER_OF_BOIDS; ++i) {
+		in[i].vx = in[i].vy = 0.0f;
 
-		x_in[i] = positionRandomDist(gen);
-		y_in[i] = positionRandomDist(gen);
+		in[i].x = positionRandomDist(gen);
+		in[i].y = positionRandomDist(gen);
 	}
 }
 
-void process_rules() {
-	unsigned int startIndex;
+void Physics::processRules() {
+	int start_idx;
 
-	// spawn threads
-	indexUpdateMutex.lock();
-	for (unsigned int i = 0; i < numCPU; ++i) {
-		startIndex = curIndex;
-		curIndex += NUMBER_OF_BOIDS / numCPU / 2 + 1;
-		threads[i] = std::thread(launchThread, startIndex, curIndex - 1);
+	// send out threads, each with half the naive workload,
+	// i.e. for 8 cores, give each 1/16 of the work to start
+	// with. This way, when some return before others, they
+	// can be dynamically assigned more work (occurs in the
+	// 'launchThread' method, mutexed by mtx) in smaller and
+	// smaller increments such that at the end, all threads
+	// finish up the last few boids at the same time
+	mtx.lock();
+	for (int i = 0; i < num_CPU; ++i) {
+		start_idx = cur_idx;
+		cur_idx += NUMBER_OF_BOIDS / num_CPU / 2 + 1;
+		threads[i] = std::thread(&Physics::launchThread, this, start_idx, cur_idx - 1);
 	}
-	indexUpdateMutex.unlock();
+	mtx.unlock();
 
-	for (unsigned int i = 0; i < numCPU; ++i)
+	// wait for all threads to return
+	for (int i = 0; i < num_CPU; ++i) {
 		threads[i].join();
+	}
 
 	// reset for next frame
-	curIndex = 0;
+	cur_idx = 0;
 
-	//// the pretty way to do it...
-	//std::swap(d_vx_in, d_vx_out);
-	//std::swap(d_vy_in, d_vy_out);
-	//std::swap(d_x_in, d_x_out);
-	//std::swap(d_y_in, d_y_out);
-
-	// ...but this is ever-so-slightly faster
-	auto temp = x_in;
-	x_in = x_out;
-	x_out = temp;
-
-	temp = y_in;
-	y_in = y_out;
-	y_out = temp;
-
-	temp = vx_in;
-	vx_in = vx_out;
-	vx_out = temp;
-
-	temp = vy_in;
-	vy_in = vy_out;
-	vy_out = temp;
-}
-
-void deInitBoids() {
-	delete[] threads;
 }

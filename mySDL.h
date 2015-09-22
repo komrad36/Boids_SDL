@@ -12,7 +12,9 @@
 #ifndef MYSDL_H
 #define MYSDL_H
 
+#include <iostream>
 #include <string>
+
 #include <SDL.h>
 #include <SDL_ttf.h>
 
@@ -21,47 +23,75 @@
 
 class LTexture {
 public:
-	//Initializes variables
-	LTexture();
+	LTexture() : mTexture(nullptr) {}
 
-	//Deallocates memory
-	~LTexture();
+	~LTexture() { free(); }
 
-	//Creates image from font string
-	bool loadFromRenderedText(const std::string, const SDL_Color);
+	// creates texture from text string
+	bool LTexture::loadFromRenderedText(TTF_Font* font, SDL_Renderer* renderer, const std::string& textureText, const SDL_Color text_color);
 
-	//Deallocates texture
+	// deallocates hardware texture
 	void free();
 
-	//Renders texture at given point
-	void render(const int x, const int y, const SDL_Rect* clip = NULL, const float angle = 0.0, const SDL_Point* center = NULL, const SDL_RendererFlip flip = SDL_FLIP_NONE);
+	// renders texture at (x, y)
+	void LTexture::render(SDL_Renderer* renderer, const int x, const int y, const SDL_Rect* const clip = nullptr, const float angle = 0.0f, const SDL_Point* const center = nullptr, const SDL_RendererFlip flip = SDL_FLIP_NONE);
 
-	//Gets image dimensions
-	int getWidth();
-	int getHeight();
+	int width, height;
 
 private:
-	//The actual hardware texture
+	// actual hardware texture
 	SDL_Texture* mTexture;
 
-	//Image dimensions
-	int mWidth;
-	int mHeight;
 };
 
-// loads TTF
-bool loadMedia();
+class mySDL {
+public:
+	LTexture text_texture1;
+	LTexture text_texture2;
+	LTexture text_texture3;
 
-//Starts up SDL and creates window
-bool initSDL();
+	SDL_Renderer* renderer;
 
-// save BMP screenshot to filepath
-void saveScreenshotBMP(const std::string filepath);
+	TTF_Font* font;
 
-//Frees media and shuts down SDL
-void close();
+private:
 
-//Loads individual image as texture
-SDL_Surface* loadSurface(const std::string path);
+	SDL_Window* window;
+
+	int width, height;
+
+public:
+	// Singleton idiom - only one
+	// instance of this class is permitted
+	// since we need static methods as callbacks
+	// but still want class functionality
+	static mySDL& getInstance() {
+		static mySDL instance;
+		return instance;
+	};
+
+	~mySDL();
+
+	bool loadFonts(const int num_CPU);
+
+	// start up SDL and creates window
+	bool initSDL(float& fWidth, float& fHeight);
+
+	// save screenshot as BMP to file_path
+	// with single press of PRT_SC so
+	// user doesn't have to ALT-TAB out or close program
+	// to save each shot
+	void saveScreenshotBMP(const std::string& file_path);
+
+private:
+	mySDL() : renderer(nullptr), window(nullptr), font(nullptr) {}
+
+	// NO copy construction or copy assignment. This is a singleton.
+	mySDL(const mySDL&) = delete;
+	mySDL& operator=(const mySDL&) = delete;
+};
+
+// load individual image as texture
+SDL_Surface* loadSurface(const std::string& path);
 
 #endif

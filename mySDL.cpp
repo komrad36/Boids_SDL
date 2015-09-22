@@ -11,192 +11,134 @@
 
 #include "mySDL.h"
 
-//Rendered texture
-extern LTexture gTextTexture1;
-extern LTexture gTextTexture2;
-extern LTexture gTextTexture3;
-
-//The window renderer
-extern SDL_Renderer* gRenderer;
-
-//Globally used font
-TTF_Font *gFont;
-
-//The window we'll be rendering to
-SDL_Window* gWindow;
-
-LTexture::LTexture() {
-	//Initialize
-	mTexture = NULL;
-	mWidth = 0;
-	mHeight = 0;
-}
-
-LTexture::~LTexture() {
-	//Deallocate
-	free();
-}
-
-bool LTexture::loadFromRenderedText(const std::string textureText, const SDL_Color textColor) {
-	//Get rid of preexisting texture
+bool LTexture::loadFromRenderedText(TTF_Font* font, SDL_Renderer* renderer, const std::string& textureText, const SDL_Color text_color) {
 	free();
 
-	//Render text surface
-	SDL_Surface* textSurface = TTF_RenderText_Blended(gFont, textureText.c_str(), textColor);
-	if (textSurface == NULL)
-	{
-		printf("Unable to render text surface! SDL_ttf Error: %s\n", TTF_GetError());
-	}
-	else
-	{
-		//Create texture from surface pixels
-		mTexture = SDL_CreateTextureFromSurface(gRenderer, textSurface);
-		if (mTexture == NULL)
-		{
-			printf("Unable to create texture from rendered text! SDL Error: %s\n", SDL_GetError());
-		}
-		else
-		{
-			//Get image dimensions
-			mWidth = textSurface->w;
-			mHeight = textSurface->h;
-		}
-
-		//Get rid of old surface
-		SDL_FreeSurface(textSurface);
+	SDL_Surface* text_sfc = TTF_RenderText_Blended(font, textureText.c_str(), text_color);
+	if (!text_sfc) {
+		std::cerr << "ERROR: unable to render text surface! SDL_ttf Error: " << TTF_GetError() << ". Aborting." << std::endl;
+		return false;
 	}
 
-	//Return success
-	return mTexture != NULL;
+	if (!(mTexture = SDL_CreateTextureFromSurface(renderer, text_sfc))) {
+		std::cerr << "ERROR: unable to create texture from rendered text! SDL Error: " << SDL_GetError() << ". Aborting." << std::endl;
+		return false;
+	}
+
+	width = text_sfc->w;
+	height = text_sfc->h;
+
+	SDL_FreeSurface(text_sfc);
+
+	return true;
 }
 
 void LTexture::free() {
-	//Free texture if it exists
-	if (mTexture != NULL)
-	{
+	if (mTexture) {
 		SDL_DestroyTexture(mTexture);
-		mTexture = NULL;
-		mWidth = 0;
-		mHeight = 0;
+		mTexture = nullptr;
+		width = height = 0;
 	}
 }
 
-void LTexture::render(const int x, const int y, const SDL_Rect* clip, const float angle, const SDL_Point* center, const SDL_RendererFlip flip) {
-	//Set rendering space and render to screen
-	SDL_Rect renderQuad = { x, y, mWidth, mHeight };
+void LTexture::render(SDL_Renderer* renderer, const int x, const int y, const SDL_Rect* const clip, const float angle, const SDL_Point* const center, const SDL_RendererFlip flip) {
+	// set render space
+	SDL_Rect renderQuad = { x, y, width, height };
 
-	//Set clip rendering dimensions
-	if (clip != NULL) {
+	// set clip rendering dimensions
+	if (clip) {
 		renderQuad.w = clip->w;
 		renderQuad.h = clip->h;
 	}
 
-	//Render to screen
-	SDL_RenderCopyEx(gRenderer, mTexture, clip, &renderQuad, angle, center, flip);
+	// render to screen
+	SDL_RenderCopyEx(renderer, mTexture, clip, &renderQuad, angle, center, flip);
 }
 
-int LTexture::getWidth() {
-	return mWidth;
-}
-
-int LTexture::getHeight() {
-	return mHeight;
-}
-
-bool loadMedia() {
-	//Open the font
-	gFont = TTF_OpenFont("FreeSansBold.ttf", FONT_SIZE);
-	if (gFont == NULL)
-	{
-		printf("Failed to load font! SDL_ttf Error: %s\n", TTF_GetError());
+bool mySDL::loadFonts(const int num_CPU) {
+	font = TTF_OpenFont(FONT_NAME, FONT_SIZE);
+	if (!font) {
+		std::cerr << "ERROR: Failed to load font! SDL_ttf Error: " << TTF_GetError() << ". Aborting." << std::endl;
 		return false;
 	}
 
-	//Render text
-	if (!gTextTexture1.loadFromRenderedText("Boids: " + std::to_string(NUMBER_OF_BOIDS), textColor)) {
-		printf("Failed to render text texture!\n");
+	if (!text_texture1.loadFromRenderedText(font, renderer, "Boids: " + std::to_string(NUMBER_OF_BOIDS), TEXT_COLOR)) {
+		std::cerr << "ERROR: Failed to render text texture! Aborting." << std::endl;
 		return false;
 	}
 
-	if (!gTextTexture2.loadFromRenderedText("Threads: " + std::to_string(numCPU), textColor)) {
-		printf("Failed to render text texture!\n");
+	if (!text_texture2.loadFromRenderedText(font, renderer, "Threads: " + std::to_string(num_CPU), TEXT_COLOR)) {
+		std::cerr << "Failed to render text texture! Aborting." << std::endl;
 		return false;
 	}
 
 	return true;
 }
 
-bool initSDL() {
-
-	//Initialize SDL
+bool mySDL::initSDL(float& fWidth, float& fHeight) {
 	if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-		SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize SDL! SDL Error: %s\n", SDL_GetError());
+		std::cerr << "Failed to initialize SDL! SDL Error: " << SDL_GetError() << ". Aborting." << std::endl;
 		return false;
 	}
 
-	//Set texture filtering to linear
+	// set texture filtering to linear
 	if (!SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1"))
-		SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Linear texture filtering not enabled.");
+		std::cout << "WARN: Linear texture filtering not enabled." << std::endl;
 
-	//Get size
+	// get size
 	SDL_DisplayMode currentMode;
 	SDL_GetCurrentDisplayMode(0, &currentMode);
 	width = currentMode.w;
 	height = currentMode.h;
-	fWidth = (float)width;
-	fHeight = (float)height;
+	fWidth = static_cast<float>(width);
+	fHeight = static_cast<float>(height);
 
-	//Create window
-	gWindow = SDL_CreateWindow("Boids", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, sdlFlags);
-	if (gWindow == NULL) {
-		SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Window could not be created! SDL Error: %s\n", SDL_GetError());
+	// create window
+	if (!(window = SDL_CreateWindow(WINDOW_TITLE, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height, SDL_FLAGS))) {
+		std::cerr << "ERROR: Window could not be created! SDL Error: " << SDL_GetError() << ". Aborting." << std::endl;
 		return false;
 	}
 
-	//Create renderer for window
-	gRenderer = SDL_CreateRenderer(gWindow, -1, SDL_RENDERER_ACCELERATED);
-	if (gRenderer == NULL) {
-		SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "Renderer could not be created! SDL Error: %s\n", SDL_GetError());
+	// create renderer
+	if (!(renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED))) {
+		std::cerr << "ERROR: Renderer could not be created! SDL Error: " << SDL_GetError() << ". Aborting." << std::endl;
 		return false;
 	}
 
-	//Initialize SDL_ttf
+	// init font engine
 	if (TTF_Init() == -1) {
-		SDL_LogCritical(SDL_LOG_CATEGORY_APPLICATION, "SDL_ttf could not initialize! SDL_ttf Error: %s\n", TTF_GetError());
+		std::cerr << "ERROR: SDL_ttf could not initialize! SDL_ttf Error: " << TTF_GetError() << ". Aborting." << std::endl;
 		return false;
 	}
 
-	//SDL_SetRenderDrawColor(gRenderer, 0xFF, 0xFF, 0xFF, 0xFF);
-	SDL_SetWindowIcon(gWindow, loadSurface("boid.bmp"));
+	// (try to) set icon
+	SDL_SetWindowIcon(window, loadSurface(ICON_FILE));
 
 	return true;
 }
 
-void saveScreenshotBMP(const std::string filepath) {
-	SDL_Surface *sshot = SDL_CreateRGBSurface(0, width, height, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
-	SDL_RenderReadPixels(gRenderer, NULL, SDL_PIXELFORMAT_ARGB8888, sshot->pixels, sshot->pitch);
-	SDL_SaveBMP(sshot, filepath.c_str());
+void mySDL::saveScreenshotBMP(const std::string& file_path) {
+	SDL_Surface* sshot = SDL_CreateRGBSurface(0, width, height, 32, 0x00ff0000, 0x0000ff00, 0x000000ff, 0xff000000);
+	SDL_RenderReadPixels(renderer, nullptr, SDL_PIXELFORMAT_ARGB8888, sshot->pixels, sshot->pitch);
+	SDL_SaveBMP(sshot, file_path.c_str());
 	SDL_FreeSurface(sshot);
 }
 
-void close()
-{
-	//Destroy window	
-	SDL_DestroyRenderer(gRenderer);
-	SDL_DestroyWindow(gWindow);
-	gWindow = NULL;
-	gRenderer = NULL;
+mySDL::~mySDL() {
+	SDL_DestroyRenderer(renderer);
+	renderer = nullptr;
 
-	//Quit SDL subsystems
+	SDL_DestroyWindow(window);
+	window = nullptr;
+
 	SDL_Quit();
 }
 
-SDL_Surface* loadSurface(const std::string path) {
+SDL_Surface* loadSurface(const std::string& path) {
+	SDL_Surface* sfc = SDL_LoadBMP(path.c_str());
+	if (!sfc) {
+		std::cerr << "ERROR: unable to load image " << path << ". SDL Error: " << SDL_GetError() << '.' << std::endl;
+	}
 
-	//Load image at specified path
-	SDL_Surface* loadedSurface = SDL_LoadBMP(path.c_str());
-	if (loadedSurface == NULL)
-		SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Unable to load image %s. SDL Error: %s\n", path.c_str(), SDL_GetError());
-
-	return loadedSurface;
+	return sfc;
 }
