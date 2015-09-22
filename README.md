@@ -27,13 +27,22 @@
  Requires SDL and SDL_ttf.
 
  Commands:
+ 
 	Space           -	toggle screen blanking
+	
 	P               -	pause
+	
 	R               -	randomize boid positions
+	
 	PRINT_SCREEN    -	save screenshot to <current time>.bmp so you don't have to quit or ALT-TAB to do so
+	
 	LCTRL           -	switch between mouse attraction and repulsion
+	
 	LSHIFT          -	toggle STRONG attraction/repulsion
+	
 	ESC             -	quit
+	
 	Hold mouse btn	-	enable attraction/repulsion to mouse
+	
 
 Please see screenshot examples in master branch 'Screenshots' folder!
