@@ -1,24 +1,39 @@
-# Boids_SDL
-Numerical simulation of flocking behavior using pure CPU and SDL.
+ Please see screenshot examples in master branch 'Screenshots' folder!
+ 
+ Boids simulates bird ("boid"), fish, crowd, etc. flocking behavior,
+ resulting in emergent properties. The main focus of the project is
+ showcasing high performance computing, so I refer you to the version
+ titled Boids_CUDA_GL, also on my GitHub, which, as the name implies,
+ uses CUDA for computation and then leverages CUDA-OpenGL interoperability to
+ write output directly to an OpenGL texture for rendering, with
+ no memory transfers or CPU involvement whatsoever. This causes
+ epic performance.
 
-Showcases HPC, hand-rolled threading engine, SDL, C++. Demonstrates emergent behavior in flocks. Pretty colors.
+ This is the multithreaded CPU version. It showcases HPC,
+ multithreading, OpenGL, and numerical simulation. As this is a
+ computationally intensive problem with naive neighbor search,
+ this will be slow at more than a few thousand birds.
 
-Definitely a work in progress. Current key commands are not visible to end user. Will be improved in future
-as well as integrated with the CUDA version.
+ The simulation can be sped up using a k-d tree or neighborhood
+ matrix, solutions I implement in the CUDA version. Again, this
+ CPU version is a concept demo for machines without nVIDIA graphics.
 
-Until then, keys are:
-Space - toggle screen blanking
-R     - randomize boid locations
-C     - pause/unpause
-LShift- toggle increased attraction/repulsion strength
-LCtrl - toggle attraction/repulsion
-PrtScn- save screenshot to CWD
-Esc   - quit
+ This simulation is primarily tuned for aesthetics, not physical accuracy,
+ although careful selection of parameters can produce very flock-like emergent
+ behavior. The color of each boid is determined by its direction of travel.
+ Screen-wrapping and fullscreen are available as options in params.h as
+ well as a variety of simulation parameters.
 
-Requires SDL.
+ Requires SDL and SDL_ttf.
 
-Verisons of this are also available (not currently uploaded to github) as pure python (very slow!) and as a SWIG Python-C
-hybrid, where Python handles front-end but calls a multithreaded C engine for the math, showcasing interoperability. Contact
-me if interested.
+ Commands:
+	Space           -	toggle screen blanking
+	P               -	pause
+	R               -	randomize boid positions
+	PRINT_SCREEN    -	save screenshot to <current time>.bmp so you don't have to quit or ALT-TAB to do so
+	LCTRL           -	switch between mouse attraction and repulsion
+	LSHIFT          -	toggle STRONG attraction/repulsion
+	ESC             -	quit
+	Hold mouse btn	-	enable attraction/repulsion to mouse
 
-Please see screenshot demos in master branch!
+Please see screenshot examples in master branch 'Screenshots' folder!
