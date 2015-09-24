@@ -1,3 +1,5 @@
+# Boids_SDL
+
  Please see screenshot examples in master branch 'Screenshots' folder!
  
  Boids simulates bird ("boid"), fish, crowd, etc. flocking behavior,
